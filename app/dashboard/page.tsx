@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase/client';
 import {
   Box,
@@ -12,65 +13,130 @@ import {
   VStack,
   HStack,
   Grid,
+  Spinner,
 } from '@chakra-ui/react';
 import { Timer } from '@/components/timer/Timer';
 import type { Category } from '@/types/database';
 import type { User } from '@supabase/supabase-js';
+
+// chart.js はブラウザAPIを使うため SSR を無効化して動的インポート
+const StackedAreaChart = dynamic(
+  () => import('@/components/charts/StackedAreaChart').then((m) => m.StackedAreaChart),
+  { ssr: false }
+);
+
+interface ChartCategory {
+  id: string;
+  name: string;
+  color: string;
+}
+
+interface StackedData {
+  dates: string[];
+  categories: ChartCategory[];
+  data: Record<string, string | number>[];
+}
+
+interface DailyGoal {
+  id: string;
+  category_name: string | null;
+  category_color: string | null;
+  target_hours: number;
+  achieved_hours: number;
+  is_achieved: boolean;
+}
+
+function formatHours(hours: number): string {
+  const h = Math.floor(hours);
+  const m = Math.round((hours - h) * 60);
+  if (h === 0) return `${m}分`;
+  if (m === 0) return `${h}時間`;
+  return `${h}時間${m}分`;
+}
 
 export default function Dashboard() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+  const [cumulativeData, setCumulativeData] = useState<StackedData | null>(null);
+  const [cumulativeLoading, setCumulativeLoading] = useState(false);
+  const [dailyGoals, setDailyGoals] = useState<DailyGoal[]>([]);
 
   useEffect(() => {
     checkAuth();
   }, []);
 
   const checkAuth = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
 
-    if (!session) {
-      router.push('/');
-      return;
-    }
-
-    setUser(session.user);
-    await fetchCategories();
-    setLoading(false);
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        if (!session) {
-          router.push('/');
-        }
+      if (!session) {
+        router.push('/');
+        return;
       }
-    );
 
-    return () => subscription.unsubscribe();
+      setUser(session.user);
+      await fetchCategories(session.access_token);
+      fetchCumulativeData(session.access_token);
+      fetchDailyGoals(session.access_token);
+
+      supabase.auth.onAuthStateChange((_event, newSession) => {
+        if (!newSession) router.push('/');
+      });
+    } catch (error) {
+      console.error('Auth check failed:', error);
+      router.push('/');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const fetchCategories = async () => {
+  const fetchCategories = async (token: string) => {
     try {
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-
-      if (!token) return;
-
       const response = await fetch('/api/categories', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
-
       if (!response.ok) return;
-
       const { data } = await response.json();
       setCategories(data || []);
     } catch (error) {
       console.error('Error fetching categories:', error);
+    }
+  };
+
+  const refreshCategories = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) await fetchCategories(session.access_token);
+  };
+
+  const fetchDailyGoals = async (token: string) => {
+    try {
+      const today = new Date().toLocaleDateString('sv-SE');
+      const tz = new Date().getTimezoneOffset();
+      const res = await fetch(`/api/goals?today=${today}&tz=${tz}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json();
+      const all = json.goals || [];
+      setDailyGoals(all.filter((g: DailyGoal & { type: string }) => g.type === 'daily'));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const fetchCumulativeData = async (token: string) => {
+    setCumulativeLoading(true);
+    try {
+      const res = await fetch('/api/charts/stacked?cumulative=true', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json();
+      setCumulativeData(json);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setCumulativeLoading(false);
     }
   };
 
@@ -104,60 +170,82 @@ export default function Dashboard() {
         </HStack>
 
         {/* タイマーセクション */}
-        <Timer categories={categories} onRecordSaved={fetchCategories} />
+        <Timer categories={categories} onRecordSaved={refreshCategories} />
+
+        {/* 今日のデイリー習慣 */}
+        {dailyGoals.length > 0 && (
+          <Box p={6} borderWidth="1px" borderRadius="lg">
+            <HStack justify="space-between" mb={4}>
+              <HStack gap={2}>
+                <Heading size="lg">今日のデイリー習慣</Heading>
+                <Text fontSize="sm" color="gray.500">
+                  {new Date().toLocaleDateString('ja-JP', { month: 'long', day: 'numeric' })}
+                </Text>
+              </HStack>
+              <Button size="sm" variant="outline" as="a" href="/goals">
+                管理 →
+              </Button>
+            </HStack>
+            <VStack gap={3} align="stretch">
+              {dailyGoals.map((goal) => {
+                const progress = Math.min(goal.achieved_hours / goal.target_hours, 1);
+                const remaining = Math.max(goal.target_hours - goal.achieved_hours, 0);
+                return (
+                  <Box key={goal.id}>
+                    <HStack justify="space-between" mb={1}>
+                      <HStack gap={2}>
+                        {goal.category_color && (
+                          <Box w={3} h={3} borderRadius="full" bg={goal.category_color} flexShrink={0} />
+                        )}
+                        <Text fontWeight="medium" fontSize="sm">
+                          {goal.category_name ?? '全カテゴリー合計'}
+                        </Text>
+                        {goal.is_achieved && (
+                          <Text fontSize="xs" color="green.500" fontWeight="bold">🎉 達成！</Text>
+                        )}
+                      </HStack>
+                      <Text fontSize="sm" color="gray.600">
+                        <Text as="span" fontWeight="bold" color={goal.is_achieved ? 'green.600' : 'gray.800'}>
+                          {formatHours(goal.achieved_hours)}
+                        </Text>
+                        {' / '}
+                        {formatHours(goal.target_hours)}
+                        {!goal.is_achieved && (
+                          <Text as="span" color="gray.400"> (残り{formatHours(remaining)})</Text>
+                        )}
+                      </Text>
+                    </HStack>
+                    <Box w="100%" h="8px" bg="gray.100" borderRadius="full" overflow="hidden">
+                      <Box
+                        h="100%"
+                        w={`${progress * 100}%`}
+                        bg={goal.is_achieved ? 'green.400' : 'blue.400'}
+                        borderRadius="full"
+                        style={{ transition: 'width 0.5s ease' }}
+                      />
+                    </Box>
+                  </Box>
+                );
+              })}
+            </VStack>
+          </Box>
+        )}
 
         {/* クイックアクション */}
         <Grid templateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap={4}>
-          <Button
-            as="a"
-            href="/categories"
-            colorPalette="orange"
-            size="lg"
-            p={8}
-            h="auto"
-          >
+          <Button as="a" href="/categories" colorPalette="orange" size="lg" p={8} h="auto">
             <VStack gap={2}>
               <Text fontSize="2xl">🏷️</Text>
               <Text>カテゴリー</Text>
             </VStack>
           </Button>
-
-          <Button
-            as="a"
-            href="/records"
-            colorPalette="blue"
-            size="lg"
-            p={8}
-            h="auto"
-          >
+          <Button as="a" href="/records" colorPalette="blue" size="lg" p={8} h="auto">
             <VStack gap={2}>
-              <Text fontSize="2xl">📝</Text>
-              <Text>記録を追加</Text>
+              <Text fontSize="2xl">📋</Text>
+              <Text>記録の追加・確認</Text>
             </VStack>
           </Button>
-
-          <Button
-            as="a"
-            href="/records"
-            colorPalette="green"
-            size="lg"
-            p={8}
-            h="auto"
-          >
-            <VStack gap={2}>
-              <Text fontSize="2xl">📊</Text>
-              <Text>記録を見る</Text>
-            </VStack>
-          </Button>
-
-          <Button
-            as="a"
-            href="/goals"
-            colorPalette="purple"
-            size="lg"
-            p={8}
-            h="auto"
-          >
+          <Button as="a" href="/goals" colorPalette="purple" size="lg" p={8} h="auto">
             <VStack gap={2}>
               <Text fontSize="2xl">🎯</Text>
               <Text>目標設定</Text>
@@ -165,20 +253,32 @@ export default function Dashboard() {
           </Button>
         </Grid>
 
-        {/* 今日の進捗 */}
+        {/* 累積グラフ */}
         <Box p={6} borderWidth="1px" borderRadius="lg">
-          <Heading size="lg" mb={4}>
-            今日の進捗
-          </Heading>
-          <Text color="gray.600">進捗表示機能は実装予定です</Text>
-        </Box>
+          <HStack justify="space-between" mb={4}>
+            <Heading size="lg">累積グラフ</Heading>
+            <Button size="sm" variant="outline" as="a" href="/charts">
+              グラフを詳しく見る →
+            </Button>
+          </HStack>
 
-        {/* グラフ */}
-        <Box p={6} borderWidth="1px" borderRadius="lg">
-          <Heading size="lg" mb={4}>
-            活動グラフ
-          </Heading>
-          <Text color="gray.600">グラフ機能は実装予定です</Text>
+          {cumulativeLoading ? (
+            <Box textAlign="center" py={10}>
+              <Spinner />
+            </Box>
+          ) : cumulativeData && cumulativeData.dates.length > 0 ? (
+            <StackedAreaChart
+              dates={cumulativeData.dates}
+              categories={cumulativeData.categories}
+              data={cumulativeData.data}
+              enableZoom
+              cumulativeMode
+            />
+          ) : (
+            <Box textAlign="center" py={10}>
+              <Text color="gray.500">表示するデータがありません</Text>
+            </Box>
+          )}
         </Box>
       </VStack>
     </Container>
