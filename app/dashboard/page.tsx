@@ -84,6 +84,20 @@ export default function Dashboard() {
         <Grid templateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap={4}>
           <Button
             as="a"
+            href="/categories"
+            colorPalette="orange"
+            size="lg"
+            p={8}
+            h="auto"
+          >
+            <VStack gap={2}>
+              <Text fontSize="2xl">🏷️</Text>
+              <Text>カテゴリー</Text>
+            </VStack>
+          </Button>
+
+          <Button
+            as="a"
             href="/records"
             colorPalette="blue"
             size="lg"
