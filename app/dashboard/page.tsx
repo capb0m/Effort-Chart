@@ -13,35 +13,66 @@ import {
   HStack,
   Grid,
 } from '@chakra-ui/react';
+import { Timer } from '@/components/timer/Timer';
+import type { Category } from '@/types/database';
 import type { User } from '@supabase/supabase-js';
 
 export default function Dashboard() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
-        router.push('/');
-        return;
-      }
-      setUser(session.user);
-      setLoading(false);
-    });
+    checkAuth();
+  }, []);
 
+  const checkAuth = async () => {
     const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) {
-        router.push('/');
-        return;
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      router.push('/');
+      return;
+    }
+
+    setUser(session.user);
+    await fetchCategories();
+    setLoading(false);
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        if (!session) {
+          router.push('/');
+        }
       }
-      setUser(session.user);
-    });
+    );
 
     return () => subscription.unsubscribe();
-  }, [router]);
+  };
+
+  const fetchCategories = async () => {
+    try {
+      const session = await supabase.auth.getSession();
+      const token = session.data.session?.access_token;
+
+      if (!token) return;
+
+      const response = await fetch('/api/categories', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) return;
+
+      const { data } = await response.json();
+      setCategories(data || []);
+    } catch (error) {
+      console.error('Error fetching categories:', error);
+    }
+  };
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -73,12 +104,7 @@ export default function Dashboard() {
         </HStack>
 
         {/* タイマーセクション */}
-        <Box p={6} borderWidth="1px" borderRadius="lg">
-          <Heading size="lg" mb={4}>
-            タイマー
-          </Heading>
-          <Text color="gray.600">タイマー機能は実装予定です</Text>
-        </Box>
+        <Timer categories={categories} onRecordSaved={fetchCategories} />
 
         {/* クイックアクション */}
         <Grid templateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap={4}>
