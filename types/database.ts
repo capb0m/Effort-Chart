@@ -31,6 +31,7 @@ export interface Database {
           created_at?: string;
           updated_at?: string;
         };
+        Relationships: [];
       };
       records: {
         Row: {
@@ -60,6 +61,7 @@ export interface Database {
           created_at?: string;
           updated_at?: string;
         };
+        Relationships: [];
       };
       goals: {
         Row: {
@@ -92,6 +94,7 @@ export interface Database {
           created_at?: string;
           updated_at?: string;
         };
+        Relationships: [];
       };
       timer_sessions: {
         Row: {
@@ -118,12 +121,17 @@ export interface Database {
           created_at?: string;
           updated_at?: string;
         };
+        Relationships: [];
       };
     };
+    Views: Record<never, never>;
+    Functions: Record<never, never>;
+    Enums: Record<never, never>;
+    CompositeTypes: Record<never, never>;
   };
 }
 
 export type Category = Database['public']['Tables']['categories']['Row'];
-export type Record = Database['public']['Tables']['records']['Row'];
+export type ActivityRecord = Database['public']['Tables']['records']['Row'];
 export type Goal = Database['public']['Tables']['goals']['Row'];
 export type TimerSession = Database['public']['Tables']['timer_sessions']['Row'];

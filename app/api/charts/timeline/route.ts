@@ -36,12 +36,13 @@ export async function GET(request: NextRequest) {
     prevDayStart.setDate(prevDayStart.getDate() - 1);
     prevDayStart.setHours(23, 0, 0, 0);
 
-    const { data: records, error } = await supabase
+    const { data: recordsRaw, error } = await supabase
       .from('records')
       .select('start_time, end_time, categories(id, name, color)')
       .gte('start_time', prevDayStart.toISOString())
       .lte('start_time', endOfDay.toISOString())
       .order('start_time', { ascending: true });
+    const records = recordsRaw as Array<{ start_time: string; end_time: string; categories: { id: string; name: string; color: string } | null }> | null;
 
     if (error) {
       return NextResponse.json({ error: 'データの取得に失敗しました' }, { status: 500 });
@@ -57,11 +58,7 @@ export async function GET(request: NextRequest) {
       hours: number;
     }[] = [];
 
-    (records || []).forEach((record: {
-      start_time: string;
-      end_time: string;
-      categories: { id: string; name: string; color: string } | null;
-    }) => {
+    (records || []).forEach((record) => {
       if (!record.categories) return;
 
       const startLocal = new Date(record.start_time);

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase/client';
+import Link from 'next/link';
 import { Box, Container, Heading, Text, Button, VStack } from '@chakra-ui/react';
 import type { User } from '@supabase/supabase-js';
 
@@ -68,9 +69,9 @@ export default function Home() {
           </Box>
 
           <Box>
-            <Button as="a" href="/dashboard" colorPalette="blue" size="lg" mb={4}>
+            <Button colorPalette="blue" size="lg" mb={4} asChild><Link href="/dashboard">
               ダッシュボードへ
-            </Button>
+            </Link></Button>
           </Box>
 
           <Box>

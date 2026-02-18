@@ -39,11 +39,7 @@ export async function PATCH(
     const { name, color, is_archived } = body;
 
     // 更新データを構築
-    const updateData: {
-      name?: string;
-      color?: string;
-      is_archived?: boolean;
-    } = {};
+    const updateData: Record<string, unknown> = {};
 
     if (name !== undefined) {
       if (typeof name !== 'string' || name.trim().length === 0) {

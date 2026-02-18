@@ -70,22 +70,28 @@ export default function ChartsPage() {
   // 累積グラフ
   const [cumulativeData, setCumulativeData] = useState<StackedData | null>(null);
   const [cumulativeLoading, setCumulativeLoading] = useState(false);
+  const [cumulativeFetched, setCumulativeFetched] = useState(false);
 
   // タイムライングラフ
   const [timelineSegments, setTimelineSegments] = useState<TimelineSegment[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineDate, setTimelineDate] = useState(today);
+  const [timelineFetched, setTimelineFetched] = useState(false);
 
   useEffect(() => {
     checkAuth();
   }, []);
 
-  // 日付変更で即時再描画
+  // タブ切り替え・日付変更でデータ取得（必要なタブのみ）
   useEffect(() => {
-    if (user) {
+    if (!user) return;
+    if (activeTab === 'cumulative' && !cumulativeFetched) {
+      fetchCumulativeData();
+    }
+    if (activeTab === 'timeline') {
       fetchTimelineData(timelineDate);
     }
-  }, [timelineDate, user]);
+  }, [activeTab, timelineDate, user]);
 
   const checkAuth = async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -95,9 +101,8 @@ export default function ChartsPage() {
     }
     setUser(session.user);
     setLoading(false);
+    // 初回は表示中のタブ（period）のデータのみ取得
     fetchStackedData();
-    fetchCumulativeData();
-    fetchTimelineData(today);
   };
 
   const getToken = async () => {
@@ -131,6 +136,7 @@ export default function ChartsPage() {
       });
       const json = await res.json();
       setCumulativeData(json);
+      setCumulativeFetched(true);
     } catch (e) {
       console.error(e);
     } finally {
@@ -147,6 +153,7 @@ export default function ChartsPage() {
       });
       const json = await res.json();
       setTimelineSegments(json.segments || []);
+      setTimelineFetched(true);
     } catch (e) {
       console.error(e);
     } finally {

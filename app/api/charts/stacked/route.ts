@@ -34,7 +34,8 @@ export async function GET(request: NextRequest) {
     if (startDate) query = query.gte('start_time', startDate);
     if (endDate) query = query.lte('start_time', endDate);
 
-    const { data: records, error } = await query;
+    const { data: recordsRaw, error } = await query;
+    const records = recordsRaw as Array<{ start_time: string; end_time: string; categories: { id: string; name: string; color: string } | null }> | null;
 
     if (error) {
       return NextResponse.json({ error: 'データの取得に失敗しました' }, { status: 500 });
@@ -44,11 +45,7 @@ export async function GET(request: NextRequest) {
     const categoryMap = new Map<string, { name: string; color: string }>();
     const dateMap = new Map<string, Map<string, number>>();
 
-    (records || []).forEach((record: {
-      start_time: string;
-      end_time: string;
-      categories: { id: string; name: string; color: string } | null;
-    }) => {
+    (records || []).forEach((record) => {
       if (!record.categories) return;
 
       const cat = record.categories;

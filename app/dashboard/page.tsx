@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase/client';
 import {
@@ -77,9 +78,11 @@ export default function Dashboard() {
       }
 
       setUser(session.user);
-      await fetchCategories(session.access_token);
-      fetchCumulativeData(session.access_token);
-      fetchDailyGoals(session.access_token);
+      await Promise.all([
+        fetchCategories(session.access_token),
+        fetchCumulativeData(session.access_token),
+        fetchDailyGoals(session.access_token),
+      ]);
 
       supabase.auth.onAuthStateChange((_event, newSession) => {
         if (!newSession) router.push('/');
@@ -182,9 +185,9 @@ export default function Dashboard() {
                   {new Date().toLocaleDateString('ja-JP', { month: 'long', day: 'numeric' })}
                 </Text>
               </HStack>
-              <Button size="sm" variant="outline" as="a" href="/goals">
+              <Button size="sm" variant="outline" asChild><Link href="/goals">
                 管理 →
-              </Button>
+              </Link></Button>
             </HStack>
             <VStack gap={3} align="stretch">
               {dailyGoals.map((goal) => {
@@ -233,33 +236,33 @@ export default function Dashboard() {
 
         {/* クイックアクション */}
         <Grid templateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap={4}>
-          <Button as="a" href="/categories" colorPalette="orange" size="lg" p={8} h="auto">
+          <Button colorPalette="orange" size="lg" p={8} h="auto" asChild><Link href="/categories">
             <VStack gap={2}>
               <Text fontSize="2xl">🏷️</Text>
               <Text>カテゴリー</Text>
             </VStack>
-          </Button>
-          <Button as="a" href="/records" colorPalette="blue" size="lg" p={8} h="auto">
+          </Link></Button>
+          <Button colorPalette="blue" size="lg" p={8} h="auto" asChild><Link href="/records">
             <VStack gap={2}>
               <Text fontSize="2xl">📋</Text>
               <Text>記録の追加・確認</Text>
             </VStack>
-          </Button>
-          <Button as="a" href="/goals" colorPalette="purple" size="lg" p={8} h="auto">
+          </Link></Button>
+          <Button colorPalette="purple" size="lg" p={8} h="auto" asChild><Link href="/goals">
             <VStack gap={2}>
               <Text fontSize="2xl">🎯</Text>
               <Text>目標設定</Text>
             </VStack>
-          </Button>
+          </Link></Button>
         </Grid>
 
         {/* 累積グラフ */}
         <Box p={6} borderWidth="1px" borderRadius="lg">
           <HStack justify="space-between" mb={4}>
             <Heading size="lg">累積グラフ</Heading>
-            <Button size="sm" variant="outline" as="a" href="/charts">
+            <Button size="sm" variant="outline" asChild><Link href="/charts">
               グラフを詳しく見る →
-            </Button>
+            </Link></Button>
           </HStack>
 
           {cumulativeLoading ? (

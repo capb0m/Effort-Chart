@@ -124,6 +124,7 @@ export function StackedAreaChart({
         callbacks: {
           label: (context) => {
             const value = context.parsed.y;
+            if (value === null) return '';
             const hours = Math.floor(value);
             const minutes = Math.round((value - hours) * 60);
             const timeStr =
