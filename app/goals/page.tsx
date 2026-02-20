@@ -14,26 +14,9 @@ import {
   Spinner,
   Badge,
 } from '@chakra-ui/react';
-
-interface GoalWithProgress {
-  id: string;
-  type: 'daily' | 'period';
-  category_id: string | null;
-  category_name: string | null;
-  category_color: string | null;
-  target_hours: number;
-  deadline: string | null;
-  achieved_hours: number;
-  is_achieved: boolean;
-  created_at: string;
-}
-
-interface Category {
-  id: string;
-  name: string;
-  color: string;
-  is_archived: boolean;
-}
+import { useCategories } from '@/hooks/useCategories';
+import { useGoals } from '@/hooks/useGoals';
+import type { GoalWithProgress } from '@/hooks/useGoals';
 
 function formatHours(hours: number): string {
   const h = Math.floor(hours);
@@ -67,9 +50,8 @@ const selectStyle: React.CSSProperties = {
 export default function GoalsPage() {
   const router = useRouter();
   const { user, token, loading: authLoading, signOut } = useAuth();
-  const [goals, setGoals] = useState<GoalWithProgress[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { categories, isLoading: categoriesLoading } = useCategories();
+  const { goals, isLoading: goalsLoading, mutate: mutateGoals } = useGoals();
   const [showForm, setShowForm] = useState(false);
 
   // フォーム状態
@@ -88,49 +70,16 @@ export default function GoalsPage() {
     if (!authLoading && !user) router.push('/');
   }, [authLoading, user, router]);
 
-  // token 取得後に初期データ取得
+  // confetti: 新たに達成したゴールがあれば発火
   useEffect(() => {
-    if (!token) return;
-    Promise.all([
-      fetchCategories(token),
-      fetchGoals(token),
-    ]).then(() => setLoading(false));
-  }, [token]);
-
-  const fetchGoals = async (t: string) => {
-    try {
-      const today = new Date().toLocaleDateString('sv-SE');
-      const tz = new Date().getTimezoneOffset();
-      const res = await fetch(`/api/goals?today=${today}&tz=${tz}`, {
-        headers: { Authorization: `Bearer ${t}` },
-      });
-      const json = await res.json();
-      const fetchedGoals: GoalWithProgress[] = json.goals || [];
-      setGoals(fetchedGoals);
-
-      const newlyAchieved = fetchedGoals.filter(
-        (g) => g.is_achieved && !celebratedRef.current.has(g.id)
-      );
-      if (newlyAchieved.length > 0) {
-        newlyAchieved.forEach((g) => celebratedRef.current.add(g.id));
-        fireConfetti();
-      }
-    } catch (e) {
-      console.error(e);
+    const newlyAchieved = goals.filter(
+      (g) => g.is_achieved && !celebratedRef.current.has(g.id)
+    );
+    if (newlyAchieved.length > 0) {
+      newlyAchieved.forEach((g) => celebratedRef.current.add(g.id));
+      fireConfetti();
     }
-  };
-
-  const fetchCategories = async (t: string) => {
-    try {
-      const res = await fetch('/api/categories', {
-        headers: { Authorization: `Bearer ${t}` },
-      });
-      const { data } = await res.json();
-      setCategories((data || []).filter((c: Category) => !c.is_archived));
-    } catch (e) {
-      console.error(e);
-    }
-  };
+  }, [goals]);
 
   const fireConfetti = async () => {
     if (typeof window === 'undefined') return;
@@ -150,7 +99,7 @@ export default function GoalsPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       celebratedRef.current.delete(id);
-      fetchGoals(token);
+      mutateGoals();
     } catch (e) {
       console.error(e);
     }
@@ -188,7 +137,7 @@ export default function GoalsPage() {
       }
       setShowForm(false);
       resetForm();
-      fetchGoals(token);
+      mutateGoals();
     } catch (e) {
       console.error(e);
       setFormError('目標の作成に失敗しました');
@@ -211,7 +160,7 @@ export default function GoalsPage() {
     router.push('/');
   };
 
-  if (authLoading || loading) {
+  if (authLoading || categoriesLoading || goalsLoading) {
     return (
       <Container maxW="container.xl" py={10} centerContent>
         <Spinner size="xl" />
@@ -219,6 +168,7 @@ export default function GoalsPage() {
     );
   }
 
+  const activeCategories = categories.filter((c) => !c.is_archived);
   const dailyGoals = goals.filter((g) => g.type === 'daily');
   const periodGoals = goals.filter((g) => g.type === 'period');
   const today = new Date().toLocaleDateString('sv-SE');
@@ -336,7 +286,7 @@ export default function GoalsPage() {
                 <Text fontSize="sm" fontWeight="medium" mb={2}>対象カテゴリー</Text>
                 <select value={formCategoryId} onChange={(e) => setFormCategoryId(e.target.value)} style={selectStyle}>
                   <option value="">全カテゴリー合計</option>
-                  {categories.map((cat) => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
+                  {activeCategories.map((cat) => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
                 </select>
                 {hasDuplicateDaily && <Text fontSize="xs" color="orange.500" mt={1}>⚠ このカテゴリーのデイリー習慣はすでに存在します</Text>}
               </Box>

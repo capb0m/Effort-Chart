@@ -16,7 +16,7 @@ import {
 } from '@chakra-ui/react';
 import { RecordForm } from '@/components/records/RecordForm';
 import { StackedAreaChart } from '@/components/charts/StackedAreaChart';
-import type { Category } from '@/types/database';
+import { useCategories } from '@/hooks/useCategories';
 
 interface RecordWithCategory {
   id: string;
@@ -149,8 +149,8 @@ function formatMs(ms: number): string {
 export default function RecordsPage() {
   const router = useRouter();
   const { user, token, loading: authLoading, signOut } = useAuth();
+  const { categories } = useCategories();
   const [records, setRecords] = useState<RecordWithCategory[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('week');
   const [anchor, setAnchor] = useState(new Date());
@@ -169,7 +169,7 @@ export default function RecordsPage() {
   // token 取得後に初期データ取得
   useEffect(() => {
     if (!token) return;
-    fetchCategories(token).then(() => setLoading(false));
+    setLoading(false);
   }, [token]);
 
   // viewMode / anchor 変更時にデータ再取得
@@ -207,14 +207,6 @@ export default function RecordsPage() {
     } finally {
       setChartLoading(false);
     }
-  };
-
-  const fetchCategories = async (t: string) => {
-    try {
-      const res = await fetch('/api/categories', { headers: { Authorization: `Bearer ${t}` } });
-      const { data } = await res.json();
-      setCategories(data || []);
-    } catch (e) { console.error(e); }
   };
 
   const handleDelete = async (id: string) => {

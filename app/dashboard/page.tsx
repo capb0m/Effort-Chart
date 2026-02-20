@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
@@ -17,33 +17,14 @@ import {
   Spinner,
 } from '@chakra-ui/react';
 import { Timer } from '@/components/timer/Timer';
-import type { Category } from '@/types/database';
+import { useCategories } from '@/hooks/useCategories';
+import { useGoals } from '@/hooks/useGoals';
+import { useCumulativeChart } from '@/hooks/useCumulativeChart';
 
 const StackedAreaChart = dynamic(
   () => import('@/components/charts/StackedAreaChart').then((m) => m.StackedAreaChart),
   { ssr: false }
 );
-
-interface ChartCategory {
-  id: string;
-  name: string;
-  color: string;
-}
-
-interface StackedData {
-  dates: string[];
-  categories: ChartCategory[];
-  data: Record<string, string | number>[];
-}
-
-interface DailyGoal {
-  id: string;
-  category_name: string | null;
-  category_color: string | null;
-  target_hours: number;
-  achieved_hours: number;
-  is_achieved: boolean;
-}
 
 function formatHours(hours: number): string {
   const h = Math.floor(hours);
@@ -55,73 +36,17 @@ function formatHours(hours: number): string {
 
 export default function Dashboard() {
   const router = useRouter();
-  const { user, token, loading: authLoading, signOut } = useAuth();
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [cumulativeData, setCumulativeData] = useState<StackedData | null>(null);
-  const [cumulativeLoading, setCumulativeLoading] = useState(false);
-  const [dailyGoals, setDailyGoals] = useState<DailyGoal[]>([]);
+  const { user, loading: authLoading, signOut } = useAuth();
+  const { categories, mutate: mutateCategories } = useCategories();
+  const { goals } = useGoals();
+  const { data: cumulativeData, isLoading: cumulativeLoading } = useCumulativeChart();
+
+  const dailyGoals = goals.filter((g) => g.type === 'daily');
 
   // 未認証リダイレクト
   useEffect(() => {
     if (!authLoading && !user) router.push('/');
   }, [authLoading, user, router]);
-
-  // token 取得後にデータを並列取得
-  useEffect(() => {
-    if (!token) return;
-    Promise.all([
-      fetchCategories(token),
-      fetchCumulativeData(token),
-      fetchDailyGoals(token),
-    ]);
-  }, [token]);
-
-  const fetchCategories = async (t: string) => {
-    try {
-      const response = await fetch('/api/categories', {
-        headers: { Authorization: `Bearer ${t}` },
-      });
-      if (!response.ok) return;
-      const { data } = await response.json();
-      setCategories(data || []);
-    } catch (error) {
-      console.error('Error fetching categories:', error);
-    }
-  };
-
-  const fetchDailyGoals = async (t: string) => {
-    try {
-      const today = new Date().toLocaleDateString('sv-SE');
-      const tz = new Date().getTimezoneOffset();
-      const res = await fetch(`/api/goals?today=${today}&tz=${tz}`, {
-        headers: { Authorization: `Bearer ${t}` },
-      });
-      const json = await res.json();
-      const all = json.goals || [];
-      setDailyGoals(all.filter((g: DailyGoal & { type: string }) => g.type === 'daily'));
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const fetchCumulativeData = async (t: string) => {
-    setCumulativeLoading(true);
-    try {
-      const res = await fetch('/api/charts/stacked?cumulative=true', {
-        headers: { Authorization: `Bearer ${t}` },
-      });
-      const json = await res.json();
-      setCumulativeData(json);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setCumulativeLoading(false);
-    }
-  };
-
-  const refreshCategories = async () => {
-    if (token) await fetchCategories(token);
-  };
 
   const handleSignOut = async () => {
     await signOut();
@@ -151,7 +76,7 @@ export default function Dashboard() {
         </HStack>
 
         {/* タイマーセクション */}
-        <Timer categories={categories} onRecordSaved={refreshCategories} />
+        <Timer categories={categories} onRecordSaved={() => mutateCategories()} />
 
         {/* 今日のデイリー習慣 */}
         {dailyGoals.length > 0 && (

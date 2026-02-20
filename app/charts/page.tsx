@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useCumulativeChart } from '@/hooks/useCumulativeChart';
 import {
   Container,
   VStack,
@@ -64,16 +65,13 @@ export default function ChartsPage() {
   });
   const [periodEnd, setPeriodEnd] = useState(today);
 
-  // 累積グラフ
-  const [cumulativeData, setCumulativeData] = useState<StackedData | null>(null);
-  const [cumulativeLoading, setCumulativeLoading] = useState(false);
-  const [cumulativeFetched, setCumulativeFetched] = useState(false);
+  // 累積グラフ（SWRキャッシュ）
+  const { data: cumulativeData, isLoading: cumulativeLoading } = useCumulativeChart();
 
   // タイムライングラフ
   const [timelineSegments, setTimelineSegments] = useState<TimelineSegment[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineDate, setTimelineDate] = useState(today);
-  const [timelineFetched, setTimelineFetched] = useState(false);
 
   // 未認証リダイレクト
   useEffect(() => {
@@ -89,9 +87,6 @@ export default function ChartsPage() {
   // タブ切り替え・日付変更でデータ取得（必要なタブのみ）
   useEffect(() => {
     if (!token) return;
-    if (activeTab === 'cumulative' && !cumulativeFetched) {
-      fetchCumulativeData(token);
-    }
     if (activeTab === 'timeline') {
       fetchTimelineData(token, timelineDate);
     }
@@ -113,22 +108,6 @@ export default function ChartsPage() {
     }
   };
 
-  const fetchCumulativeData = async (t: string) => {
-    setCumulativeLoading(true);
-    try {
-      const res = await fetch('/api/charts/stacked?cumulative=true', {
-        headers: { Authorization: `Bearer ${t}` },
-      });
-      const json = await res.json();
-      setCumulativeData(json);
-      setCumulativeFetched(true);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setCumulativeLoading(false);
-    }
-  };
-
   const fetchTimelineData = async (t: string, date: string) => {
     setTimelineLoading(true);
     try {
@@ -137,7 +116,6 @@ export default function ChartsPage() {
       });
       const json = await res.json();
       setTimelineSegments(json.segments || []);
-      setTimelineFetched(true);
     } catch (e) {
       console.error(e);
     } finally {

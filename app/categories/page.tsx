@@ -1,48 +1,28 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { Container, VStack, HStack, Button, Text, Spinner } from '@chakra-ui/react';
 import { CategoryList } from '@/components/categories/CategoryList';
-import type { Category } from '@/types/database';
+import { useCategories } from '@/hooks/useCategories';
 
 export default function CategoriesPage() {
   const router = useRouter();
-  const { user, token, loading: authLoading, signOut } = useAuth();
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { user, loading: authLoading, signOut } = useAuth();
+  const { categories, isLoading, mutate } = useCategories();
 
   // 未認証リダイレクト
   useEffect(() => {
     if (!authLoading && !user) router.push('/');
   }, [authLoading, user, router]);
 
-  // token 取得後にデータ取得
-  useEffect(() => {
-    if (!token) return;
-    fetchCategories(token).then(() => setLoading(false));
-  }, [token]);
-
-  const fetchCategories = async (t: string) => {
-    try {
-      const response = await fetch('/api/categories', {
-        headers: { Authorization: `Bearer ${t}` },
-      });
-      if (!response.ok) throw new Error('Failed to fetch categories');
-      const { data } = await response.json();
-      setCategories(data || []);
-    } catch (error) {
-      console.error('Error fetching categories:', error);
-    }
-  };
-
   const handleSignOut = async () => {
     await signOut();
     router.push('/');
   };
 
-  if (authLoading || loading) {
+  if (authLoading || isLoading) {
     return (
       <Container maxW="container.xl" py={10} centerContent>
         <Spinner size="xl" />
@@ -68,7 +48,7 @@ export default function CategoriesPage() {
 
         <CategoryList
           categories={categories}
-          onUpdate={() => token && fetchCategories(token)}
+          onUpdate={() => mutate()}
         />
       </VStack>
     </Container>
