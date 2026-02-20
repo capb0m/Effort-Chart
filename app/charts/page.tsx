@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   Container,
   VStack,
@@ -14,10 +15,7 @@ import {
   Input,
 } from '@chakra-ui/react';
 import dynamic from 'next/dynamic';
-import { supabase } from '@/lib/supabase/client';
-import type { User } from '@supabase/supabase-js';
 
-// chart.js はブラウザAPIを使うため SSR を無効化して動的インポート
 const StackedAreaChart = dynamic(
   () => import('@/components/charts/StackedAreaChart').then((m) => m.StackedAreaChart),
   { ssr: false, loading: () => <Box textAlign="center" py={10}><Spinner /></Box> }
@@ -54,8 +52,7 @@ const today = new Date().toLocaleDateString('sv-SE');
 
 export default function ChartsPage() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { user, token, loading: authLoading, signOut } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('period');
 
   // 期間指定グラフ
@@ -78,45 +75,34 @@ export default function ChartsPage() {
   const [timelineDate, setTimelineDate] = useState(today);
   const [timelineFetched, setTimelineFetched] = useState(false);
 
+  // 未認証リダイレクト
   useEffect(() => {
-    checkAuth();
-  }, []);
+    if (!authLoading && !user) router.push('/');
+  }, [authLoading, user, router]);
+
+  // token 取得後に初期タブ（period）のデータのみ取得
+  useEffect(() => {
+    if (!token) return;
+    fetchStackedData(token);
+  }, [token]);
 
   // タブ切り替え・日付変更でデータ取得（必要なタブのみ）
   useEffect(() => {
-    if (!user) return;
+    if (!token) return;
     if (activeTab === 'cumulative' && !cumulativeFetched) {
-      fetchCumulativeData();
+      fetchCumulativeData(token);
     }
     if (activeTab === 'timeline') {
-      fetchTimelineData(timelineDate);
+      fetchTimelineData(token, timelineDate);
     }
-  }, [activeTab, timelineDate, user]);
+  }, [activeTab, timelineDate, token]);
 
-  const checkAuth = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) {
-      router.push('/');
-      return;
-    }
-    setUser(session.user);
-    setLoading(false);
-    // 初回は表示中のタブ（period）のデータのみ取得
-    fetchStackedData();
-  };
-
-  const getToken = async () => {
-    const session = await supabase.auth.getSession();
-    return session.data.session?.access_token || '';
-  };
-
-  const fetchStackedData = async (start = periodStart, end = periodEnd) => {
+  const fetchStackedData = async (t: string, start = periodStart, end = periodEnd) => {
     setStackedLoading(true);
     try {
-      const token = await getToken();
       const res = await fetch(
         `/api/charts/stacked?start_date=${start}T00:00:00&end_date=${end}T23:59:59`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        { headers: { Authorization: `Bearer ${t}` } }
       );
       const json = await res.json();
       setStackedData(json);
@@ -127,12 +113,11 @@ export default function ChartsPage() {
     }
   };
 
-  const fetchCumulativeData = async () => {
+  const fetchCumulativeData = async (t: string) => {
     setCumulativeLoading(true);
     try {
-      const token = await getToken();
       const res = await fetch('/api/charts/stacked?cumulative=true', {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${t}` },
       });
       const json = await res.json();
       setCumulativeData(json);
@@ -144,12 +129,11 @@ export default function ChartsPage() {
     }
   };
 
-  const fetchTimelineData = async (date: string) => {
+  const fetchTimelineData = async (t: string, date: string) => {
     setTimelineLoading(true);
     try {
-      const token = await getToken();
       const res = await fetch(`/api/charts/timeline?date=${date}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${t}` },
       });
       const json = await res.json();
       setTimelineSegments(json.segments || []);
@@ -161,7 +145,6 @@ export default function ChartsPage() {
     }
   };
 
-  // 日付を1日ずらす
   const shiftDate = (date: string, days: number): string => {
     const d = new Date(date + 'T00:00:00');
     d.setDate(d.getDate() + days);
@@ -171,7 +154,7 @@ export default function ChartsPage() {
   const isToday = timelineDate >= today;
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    await signOut();
     router.push('/');
   };
 
@@ -181,7 +164,7 @@ export default function ChartsPage() {
     { key: 'timeline', label: '24時間タイムライン' },
   ];
 
-  if (loading) {
+  if (authLoading || !user) {
     return (
       <Container maxW="container.xl" py={10} centerContent>
         <Spinner size="xl" />
@@ -189,17 +172,13 @@ export default function ChartsPage() {
     );
   }
 
-  if (!user) return null;
-
   return (
     <Container maxW="container.xl" py={8}>
       <VStack gap={8} align="stretch">
         {/* ヘッダー */}
         <HStack justify="space-between">
           <VStack gap={0} align="start">
-            <Button variant="ghost" onClick={() => router.push('/dashboard')} mb={2}>
-              ← ダッシュボードに戻る
-            </Button>
+            <Button variant="ghost" onClick={() => router.push('/dashboard')} mb={2}>← ダッシュボードに戻る</Button>
             <Text fontSize="sm" color="gray.600">{user.email}</Text>
           </VStack>
           <Button onClick={handleSignOut} variant="outline">ログアウト</Button>
@@ -210,16 +189,9 @@ export default function ChartsPage() {
         {/* タブ */}
         <HStack gap={0} borderWidth="1px" borderRadius="md" overflow="hidden" w="fit-content">
           {tabs.map((tab) => (
-            <Button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              variant="ghost"
-              borderRadius="none"
-              bg={activeTab === tab.key ? 'blue.500' : 'white'}
-              color={activeTab === tab.key ? 'white' : 'gray.700'}
-              _hover={{ bg: activeTab === tab.key ? 'blue.600' : 'gray.50' }}
-              px={6}
-            >
+            <Button key={tab.key} onClick={() => setActiveTab(tab.key)} variant="ghost" borderRadius="none"
+              bg={activeTab === tab.key ? 'blue.500' : 'white'} color={activeTab === tab.key ? 'white' : 'gray.700'}
+              _hover={{ bg: activeTab === tab.key ? 'blue.600' : 'gray.50' }} px={6}>
               {tab.label}
             </Button>
           ))}
@@ -229,55 +201,24 @@ export default function ChartsPage() {
         {activeTab === 'period' && (
           <Box p={6} borderWidth="1px" borderRadius="lg">
             <Heading size="md" mb={4}>カテゴリー別 期間グラフ</Heading>
-
             <HStack gap={4} mb={6} flexWrap="wrap">
               <HStack gap={2}>
                 <Text fontSize="sm" whiteSpace="nowrap">開始日:</Text>
-                <Input
-                  type="date"
-                  value={periodStart}
-                  onChange={(e) => setPeriodStart(e.target.value)}
-                  size="sm"
-                  w="160px"
-                />
+                <Input type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} size="sm" w="160px" />
               </HStack>
               <HStack gap={2}>
                 <Text fontSize="sm" whiteSpace="nowrap">終了日:</Text>
-                <Input
-                  type="date"
-                  value={periodEnd}
-                  onChange={(e) => setPeriodEnd(e.target.value)}
-                  size="sm"
-                  w="160px"
-                />
+                <Input type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)} size="sm" w="160px" />
               </HStack>
-              <Button
-                size="sm"
-                colorPalette="blue"
-                onClick={() => fetchStackedData()}
-              >
-                表示
-              </Button>
+              <Button size="sm" colorPalette="blue" onClick={() => token && fetchStackedData(token)}>表示</Button>
             </HStack>
-
-            <Text fontSize="xs" color="gray.500" mb={4}>
-              マウスホイールでズーム、ドラッグでスクロールできます
-            </Text>
-
+            <Text fontSize="xs" color="gray.500" mb={4}>マウスホイールでズーム、ドラッグでスクロールできます</Text>
             {stackedLoading ? (
               <Box textAlign="center" py={10}><Spinner /></Box>
             ) : stackedData && stackedData.dates.length > 0 ? (
-              <StackedAreaChart
-                dates={stackedData.dates}
-                categories={stackedData.categories}
-                data={stackedData.data}
-                enableZoom
-                periodMode
-              />
+              <StackedAreaChart dates={stackedData.dates} categories={stackedData.categories} data={stackedData.data} enableZoom periodMode />
             ) : (
-              <Box textAlign="center" py={10}>
-                <Text color="gray.500">表示するデータがありません</Text>
-              </Box>
+              <Box textAlign="center" py={10}><Text color="gray.500">表示するデータがありません</Text></Box>
             )}
           </Box>
         )}
@@ -286,24 +227,13 @@ export default function ChartsPage() {
         {activeTab === 'cumulative' && (
           <Box p={6} borderWidth="1px" borderRadius="lg">
             <Heading size="md" mb={2}>累積グラフ</Heading>
-            <Text fontSize="sm" color="gray.500" mb={4}>
-              マウスホイールでズーム、ドラッグでスクロールできます
-            </Text>
-
+            <Text fontSize="sm" color="gray.500" mb={4}>マウスホイールでズーム、ドラッグでスクロールできます</Text>
             {cumulativeLoading ? (
               <Box textAlign="center" py={10}><Spinner /></Box>
             ) : cumulativeData && cumulativeData.dates.length > 0 ? (
-              <StackedAreaChart
-                dates={cumulativeData.dates}
-                categories={cumulativeData.categories}
-                data={cumulativeData.data}
-                enableZoom
-                cumulativeMode
-              />
+              <StackedAreaChart dates={cumulativeData.dates} categories={cumulativeData.categories} data={cumulativeData.data} enableZoom cumulativeMode />
             ) : (
-              <Box textAlign="center" py={10}>
-                <Text color="gray.500">表示するデータがありません</Text>
-              </Box>
+              <Box textAlign="center" py={10}><Text color="gray.500">表示するデータがありません</Text></Box>
             )}
           </Box>
         )}
@@ -312,44 +242,16 @@ export default function ChartsPage() {
         {activeTab === 'timeline' && (
           <Box p={6} borderWidth="1px" borderRadius="lg">
             <Heading size="md" mb={4}>24時間タイムライン</Heading>
-
             <HStack gap={3} mb={6} align="center" flexWrap="wrap">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setTimelineDate(shiftDate(timelineDate, -1))}
-              >
-                ← 前の日
-              </Button>
-
-              <Input
-                type="date"
-                value={timelineDate}
-                onChange={(e) => setTimelineDate(e.target.value)}
-                size="sm"
-                w="160px"
-              />
-
+              <Button size="sm" variant="outline" onClick={() => setTimelineDate(shiftDate(timelineDate, -1))}>← 前の日</Button>
+              <Input type="date" value={timelineDate} onChange={(e) => setTimelineDate(e.target.value)} size="sm" w="160px" />
               {!isToday && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setTimelineDate(shiftDate(timelineDate, 1))}
-                >
-                  次の日 →
-                </Button>
+                <Button size="sm" variant="outline" onClick={() => setTimelineDate(shiftDate(timelineDate, 1))}>次の日 →</Button>
               )}
-
               <Text fontSize="sm" color="gray.500">
-                {new Date(timelineDate + 'T00:00:00').toLocaleDateString('ja-JP', {
-                  year: 'numeric',
-                  month: 'long',
-                  day: 'numeric',
-                  weekday: 'short',
-                })}
+                {new Date(timelineDate + 'T00:00:00').toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })}
               </Text>
             </HStack>
-
             {timelineLoading ? (
               <Box textAlign="center" py={10}><Spinner /></Box>
             ) : (

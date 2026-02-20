@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
-import { supabase } from '@/lib/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   Box,
   Container,
@@ -18,9 +18,7 @@ import {
 } from '@chakra-ui/react';
 import { Timer } from '@/components/timer/Timer';
 import type { Category } from '@/types/database';
-import type { User } from '@supabase/supabase-js';
 
-// chart.js はブラウザAPIを使うため SSR を無効化して動的インポート
 const StackedAreaChart = dynamic(
   () => import('@/components/charts/StackedAreaChart').then((m) => m.StackedAreaChart),
   { ssr: false }
@@ -57,48 +55,31 @@ function formatHours(hours: number): string {
 
 export default function Dashboard() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
+  const { user, token, loading: authLoading, signOut } = useAuth();
   const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true);
   const [cumulativeData, setCumulativeData] = useState<StackedData | null>(null);
   const [cumulativeLoading, setCumulativeLoading] = useState(false);
   const [dailyGoals, setDailyGoals] = useState<DailyGoal[]>([]);
 
+  // 未認証リダイレクト
   useEffect(() => {
-    checkAuth();
-  }, []);
+    if (!authLoading && !user) router.push('/');
+  }, [authLoading, user, router]);
 
-  const checkAuth = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
+  // token 取得後にデータを並列取得
+  useEffect(() => {
+    if (!token) return;
+    Promise.all([
+      fetchCategories(token),
+      fetchCumulativeData(token),
+      fetchDailyGoals(token),
+    ]);
+  }, [token]);
 
-      if (!session) {
-        router.push('/');
-        return;
-      }
-
-      setUser(session.user);
-      await Promise.all([
-        fetchCategories(session.access_token),
-        fetchCumulativeData(session.access_token),
-        fetchDailyGoals(session.access_token),
-      ]);
-
-      supabase.auth.onAuthStateChange((_event, newSession) => {
-        if (!newSession) router.push('/');
-      });
-    } catch (error) {
-      console.error('Auth check failed:', error);
-      router.push('/');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchCategories = async (token: string) => {
+  const fetchCategories = async (t: string) => {
     try {
       const response = await fetch('/api/categories', {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${t}` },
       });
       if (!response.ok) return;
       const { data } = await response.json();
@@ -108,17 +89,12 @@ export default function Dashboard() {
     }
   };
 
-  const refreshCategories = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.access_token) await fetchCategories(session.access_token);
-  };
-
-  const fetchDailyGoals = async (token: string) => {
+  const fetchDailyGoals = async (t: string) => {
     try {
       const today = new Date().toLocaleDateString('sv-SE');
       const tz = new Date().getTimezoneOffset();
       const res = await fetch(`/api/goals?today=${today}&tz=${tz}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${t}` },
       });
       const json = await res.json();
       const all = json.goals || [];
@@ -128,11 +104,11 @@ export default function Dashboard() {
     }
   };
 
-  const fetchCumulativeData = async (token: string) => {
+  const fetchCumulativeData = async (t: string) => {
     setCumulativeLoading(true);
     try {
       const res = await fetch('/api/charts/stacked?cumulative=true', {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${t}` },
       });
       const json = await res.json();
       setCumulativeData(json);
@@ -143,12 +119,16 @@ export default function Dashboard() {
     }
   };
 
+  const refreshCategories = async () => {
+    if (token) await fetchCategories(token);
+  };
+
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    await signOut();
     router.push('/');
   };
 
-  if (loading || !user) {
+  if (authLoading || !user) {
     return (
       <Container centerContent py={10}>
         <Text>読み込み中...</Text>
@@ -162,9 +142,7 @@ export default function Dashboard() {
         {/* ヘッダー */}
         <HStack justify="space-between">
           <Box>
-            <Heading size="2xl" mb={2}>
-              ダッシュボード
-            </Heading>
+            <Heading size="2xl" mb={2}>ダッシュボード</Heading>
             <Text color="gray.600">{user.email}</Text>
           </Box>
           <Button onClick={handleSignOut} variant="outline">
@@ -185,9 +163,9 @@ export default function Dashboard() {
                   {new Date().toLocaleDateString('ja-JP', { month: 'long', day: 'numeric' })}
                 </Text>
               </HStack>
-              <Button size="sm" variant="outline" asChild><Link href="/goals">
-                管理 →
-              </Link></Button>
+              <Button size="sm" variant="outline" asChild>
+                <Link href="/goals">管理 →</Link>
+              </Button>
             </HStack>
             <VStack gap={3} align="stretch">
               {dailyGoals.map((goal) => {
@@ -236,33 +214,39 @@ export default function Dashboard() {
 
         {/* クイックアクション */}
         <Grid templateColumns="repeat(auto-fit, minmax(200px, 1fr))" gap={4}>
-          <Button colorPalette="orange" size="lg" p={8} h="auto" asChild><Link href="/categories">
-            <VStack gap={2}>
-              <Text fontSize="2xl">🏷️</Text>
-              <Text>カテゴリー</Text>
-            </VStack>
-          </Link></Button>
-          <Button colorPalette="blue" size="lg" p={8} h="auto" asChild><Link href="/records">
-            <VStack gap={2}>
-              <Text fontSize="2xl">📋</Text>
-              <Text>記録の追加・確認</Text>
-            </VStack>
-          </Link></Button>
-          <Button colorPalette="purple" size="lg" p={8} h="auto" asChild><Link href="/goals">
-            <VStack gap={2}>
-              <Text fontSize="2xl">🎯</Text>
-              <Text>目標設定</Text>
-            </VStack>
-          </Link></Button>
+          <Button colorPalette="orange" size="lg" p={8} h="auto" asChild>
+            <Link href="/categories">
+              <VStack gap={2}>
+                <Text fontSize="2xl">🏷️</Text>
+                <Text>カテゴリー</Text>
+              </VStack>
+            </Link>
+          </Button>
+          <Button colorPalette="blue" size="lg" p={8} h="auto" asChild>
+            <Link href="/records">
+              <VStack gap={2}>
+                <Text fontSize="2xl">📋</Text>
+                <Text>記録の追加・確認</Text>
+              </VStack>
+            </Link>
+          </Button>
+          <Button colorPalette="purple" size="lg" p={8} h="auto" asChild>
+            <Link href="/goals">
+              <VStack gap={2}>
+                <Text fontSize="2xl">🎯</Text>
+                <Text>目標設定</Text>
+              </VStack>
+            </Link>
+          </Button>
         </Grid>
 
         {/* 累積グラフ */}
         <Box p={6} borderWidth="1px" borderRadius="lg">
           <HStack justify="space-between" mb={4}>
             <Heading size="lg">累積グラフ</Heading>
-            <Button size="sm" variant="outline" asChild><Link href="/charts">
-              グラフを詳しく見る →
-            </Link></Button>
+            <Button size="sm" variant="outline" asChild>
+              <Link href="/charts">グラフを詳しく見る →</Link>
+            </Button>
           </HStack>
 
           {cumulativeLoading ? (

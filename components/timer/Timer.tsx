@@ -9,7 +9,7 @@ import {
   Text,
   useDisclosure,
 } from '@chakra-ui/react';
-import { supabase } from '@/lib/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import { TimerSaveModal } from './TimerSaveModal';
 import type { Category } from '@/types/database';
 
@@ -22,6 +22,11 @@ const MAX_HOURS = 10;
 const MAX_MILLISECONDS = MAX_HOURS * 60 * 60 * 1000;
 
 export function Timer({ categories, onRecordSaved }: TimerProps) {
+  const { token } = useAuth();
+  // token は非同期で更新されるため ref で常に最新値を参照する
+  const tokenRef = useRef<string | null>(token);
+  useEffect(() => { tokenRef.current = token; }, [token]);
+
   const [isRunning, setIsRunning] = useState(false);
   const [startTime, setStartTime] = useState<Date | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -29,33 +34,29 @@ export function Timer({ categories, onRecordSaved }: TimerProps) {
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const { open, onOpen, onClose } = useDisclosure();
 
-  // 初期化：ローカルストレージとDBから状態を復元
+  // 初期化：DBから状態を復元
   useEffect(() => {
+    if (!token) return;
     restoreTimerState();
-  }, []);
+  }, [token]);
 
   // タイマー更新
   useEffect(() => {
     if (isRunning && startTime) {
       intervalRef.current = setInterval(() => {
-        const now = new Date();
-        const elapsed = now.getTime() - startTime.getTime();
-
+        const elapsed = new Date().getTime() - startTime.getTime();
         if (elapsed >= MAX_MILLISECONDS) {
-          // 10時間経過で自動停止
           handleAutoStop();
         } else {
           setElapsedMs(elapsed);
         }
       }, 100);
     } else {
-      // isRunningがfalseになったらintervalをクリア
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
     }
-
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
@@ -64,7 +65,6 @@ export function Timer({ categories, onRecordSaved }: TimerProps) {
     };
   }, [isRunning, startTime]);
 
-  // ローカルストレージに保存
   const saveToLocalStorage = (start: Date | null, running: boolean) => {
     if (start && running) {
       localStorage.setItem('timer_start', start.toISOString());
@@ -75,40 +75,26 @@ export function Timer({ categories, onRecordSaved }: TimerProps) {
     }
   };
 
-  // 状態を復元
   const restoreTimerState = async () => {
+    const t = tokenRef.current;
+    if (!t) return;
     try {
-      // DBから取得
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-
-      if (!token) return;
-
       const response = await fetch('/api/timer', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${t}` },
       });
-
       if (!response.ok) return;
-
       const { data: timerSession } = await response.json();
-
       if (timerSession && timerSession.is_active) {
         const start = new Date(timerSession.start_time);
-        const now = new Date();
-        const elapsed = now.getTime() - start.getTime();
-
+        const elapsed = new Date().getTime() - start.getTime();
         if (elapsed >= MAX_MILLISECONDS) {
-          // 10時間超過で自動停止済み
           setStartTime(start);
           setElapsedMs(MAX_MILLISECONDS);
           setAutoStopped(true);
           setIsRunning(false);
           await stopTimerSession();
-          onOpen(); // 保存モーダルを表示
+          onOpen();
         } else {
-          // タイマー復元
           setStartTime(start);
           setElapsedMs(elapsed);
           setIsRunning(true);
@@ -120,36 +106,20 @@ export function Timer({ categories, onRecordSaved }: TimerProps) {
     }
   };
 
-  // タイマー開始
   const handleStart = async () => {
+    const t = tokenRef.current;
+    if (!t) { alert('認証が必要です'); return; }
     try {
       const now = new Date();
-
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-
-      if (!token) {
-        alert('認証が必要です');
-        return;
-      }
-
-      // DBにセッションを作成
       const response = await fetch('/api/timer', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          start_time: now.toISOString(),
-        }),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${t}` },
+        body: JSON.stringify({ start_time: now.toISOString() }),
       });
-
       if (!response.ok) {
         const error = await response.json();
         throw new Error(error.error || 'Failed to start timer');
       }
-
       setStartTime(now);
       setElapsedMs(0);
       setIsRunning(true);
@@ -161,84 +131,60 @@ export function Timer({ categories, onRecordSaved }: TimerProps) {
     }
   };
 
-  // タイマー停止
+  const stopTimerSession = async () => {
+    const t = tokenRef.current;
+    if (!t) return;
+    try {
+      const response = await fetch('/api/timer', {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${t}` },
+      });
+      if (!response.ok) console.error('Failed to stop timer session');
+    } catch (error) {
+      console.error('Error stopping timer session:', error);
+    }
+  };
+
   const handleStop = async () => {
     setIsRunning(false);
     saveToLocalStorage(null, false);
-    await stopTimerSession(); // DBのセッションも停止
-    onOpen(); // 保存モーダルを表示
+    await stopTimerSession();
+    onOpen();
   };
 
-  // 自動停止
   const handleAutoStop = async () => {
     setIsRunning(false);
     setElapsedMs(MAX_MILLISECONDS);
     setAutoStopped(true);
     saveToLocalStorage(null, false);
     await stopTimerSession();
-    onOpen(); // 保存モーダルを表示
+    onOpen();
   };
 
-  // DBのタイマーセッションを停止
-  const stopTimerSession = async () => {
-    try {
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-
-      if (!token) return;
-
-      const response = await fetch('/api/timer', {
-        method: 'DELETE',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        console.error('Failed to stop timer session');
-      }
-    } catch (error) {
-      console.error('Error stopping timer session:', error);
-    }
-  };
-
-  // リセット
   const handleReset = async () => {
-    // まずタイマーを停止
     setIsRunning(false);
-
-    // intervalをクリア
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
-
-    // DBのセッションを停止
     await stopTimerSession();
-
-    // 状態をリセット
     setStartTime(null);
     setElapsedMs(0);
     setAutoStopped(false);
     saveToLocalStorage(null, false);
-
-    // モーダルを閉じる
     onClose();
   };
 
-  // 保存成功
   const handleSaveSuccess = async () => {
     await handleReset();
     onRecordSaved();
   };
 
-  // フォーマット
   const formatTime = (ms: number): string => {
     const totalSeconds = Math.floor(ms / 1000);
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
     const seconds = totalSeconds % 60;
-
     return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
   };
 
@@ -251,9 +197,7 @@ export function Timer({ categories, onRecordSaved }: TimerProps) {
     <>
       <Box p={6} borderWidth="1px" borderRadius="lg">
         <VStack gap={4}>
-          <Text fontSize="lg" fontWeight="semibold">
-            タイマー
-          </Text>
+          <Text fontSize="lg" fontWeight="semibold">タイマー</Text>
 
           {autoStopped && (
             <Box p={3} bg="orange.50" borderRadius="md" w="full">
@@ -263,41 +207,24 @@ export function Timer({ categories, onRecordSaved }: TimerProps) {
             </Box>
           )}
 
-          <Text
-            fontSize="5xl"
-            fontWeight="bold"
-            fontFamily="mono"
-            color={elapsedMs >= MAX_MILLISECONDS ? 'red.500' : 'inherit'}
-          >
+          <Text fontSize="5xl" fontWeight="bold" fontFamily="mono" color={elapsedMs >= MAX_MILLISECONDS ? 'red.500' : 'inherit'}>
             {formatTime(elapsedMs)}
           </Text>
 
           {elapsedMs >= MAX_MILLISECONDS && (
-            <Text fontSize="sm" color="red.500">
-              上限（10時間）に達しました
-            </Text>
+            <Text fontSize="sm" color="red.500">上限（10時間）に達しました</Text>
           )}
 
           <HStack gap={3}>
             {!isRunning ? (
-              <Button
-                onClick={handleStart}
-                colorPalette="green"
-                size="lg"
-                disabled={!!startTime}
-              >
-                開始
-              </Button>
+              <Button onClick={handleStart} colorPalette="green" size="lg" disabled={!!startTime}>開始</Button>
             ) : (
-              <Button onClick={handleStop} colorPalette="red" size="lg">
-                停止
-              </Button>
+              <Button onClick={handleStop} colorPalette="red" size="lg">停止</Button>
             )}
           </HStack>
         </VStack>
       </Box>
 
-      {/* 保存モーダル */}
       {open && startTime && (
         <TimerSaveModal
           categories={categories}
@@ -305,9 +232,7 @@ export function Timer({ categories, onRecordSaved }: TimerProps) {
           endTime={getEndTime()}
           autoStopped={autoStopped}
           onSuccess={handleSaveSuccess}
-          onCancel={async () => {
-            await handleReset();
-          }}
+          onCancel={async () => { await handleReset(); }}
         />
       )}
     </>

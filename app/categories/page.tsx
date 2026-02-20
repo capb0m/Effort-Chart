@@ -2,54 +2,34 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
 import { Container, VStack, HStack, Button, Text, Spinner } from '@chakra-ui/react';
-import { supabase } from '@/lib/supabase/client';
 import { CategoryList } from '@/components/categories/CategoryList';
 import type { Category } from '@/types/database';
-import type { User } from '@supabase/supabase-js';
 
 export default function CategoriesPage() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
+  const { user, token, loading: authLoading, signOut } = useAuth();
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // 未認証リダイレクト
   useEffect(() => {
-    checkAuth();
-  }, []);
+    if (!authLoading && !user) router.push('/');
+  }, [authLoading, user, router]);
 
-  const checkAuth = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
+  // token 取得後にデータ取得
+  useEffect(() => {
+    if (!token) return;
+    fetchCategories(token).then(() => setLoading(false));
+  }, [token]);
 
-    if (!session) {
-      router.push('/');
-      return;
-    }
-
-    setUser(session.user);
-    await fetchCategories();
-    setLoading(false);
-  };
-
-  const fetchCategories = async () => {
+  const fetchCategories = async (t: string) => {
     try {
-      const session = await supabase.auth.getSession();
-      const token = session.data.session?.access_token;
-
-      if (!token) {
-        throw new Error('No access token');
-      }
-
       const response = await fetch('/api/categories', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${t}` },
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch categories');
-      }
-
+      if (!response.ok) throw new Error('Failed to fetch categories');
       const { data } = await response.json();
       setCategories(data || []);
     } catch (error) {
@@ -58,11 +38,11 @@ export default function CategoriesPage() {
   };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    await signOut();
     router.push('/');
   };
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <Container maxW="container.xl" py={10} centerContent>
         <Spinner size="xl" />
@@ -70,9 +50,7 @@ export default function CategoriesPage() {
     );
   }
 
-  if (!user) {
-    return null;
-  }
+  if (!user) return null;
 
   return (
     <Container maxW="container.xl" py={8}>
@@ -80,24 +58,18 @@ export default function CategoriesPage() {
         {/* ヘッダー */}
         <HStack justify="space-between">
           <VStack gap={0} align="start">
-            <Button
-              variant="ghost"
-              onClick={() => router.push('/dashboard')}
-              mb={2}
-            >
+            <Button variant="ghost" onClick={() => router.push('/dashboard')} mb={2}>
               ← ダッシュボードに戻る
             </Button>
-            <Text fontSize="sm" color="gray.600">
-              {user.email}
-            </Text>
+            <Text fontSize="sm" color="gray.600">{user.email}</Text>
           </VStack>
-          <Button onClick={handleSignOut} variant="outline">
-            ログアウト
-          </Button>
+          <Button onClick={handleSignOut} variant="outline">ログアウト</Button>
         </HStack>
 
-        {/* カテゴリー一覧 */}
-        <CategoryList categories={categories} onUpdate={fetchCategories} />
+        <CategoryList
+          categories={categories}
+          onUpdate={() => token && fetchCategories(token)}
+        />
       </VStack>
     </Container>
   );

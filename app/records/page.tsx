@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   Container,
   VStack,
@@ -13,11 +14,9 @@ import {
   Spinner,
   Badge,
 } from '@chakra-ui/react';
-import { supabase } from '@/lib/supabase/client';
 import { RecordForm } from '@/components/records/RecordForm';
 import { StackedAreaChart } from '@/components/charts/StackedAreaChart';
 import type { Category } from '@/types/database';
-import type { User } from '@supabase/supabase-js';
 
 interface RecordWithCategory {
   id: string;
@@ -135,9 +134,7 @@ function getCategoryTotals(records: RecordWithCategory[]) {
   records.forEach((r) => {
     const ms = new Date(r.end_time).getTime() - new Date(r.start_time).getTime();
     const cat = r.categories;
-    if (!map.has(cat.id)) {
-      map.set(cat.id, { name: cat.name, color: cat.color, totalMs: 0 });
-    }
+    if (!map.has(cat.id)) map.set(cat.id, { name: cat.name, color: cat.color, totalMs: 0 });
     map.get(cat.id)!.totalMs += ms;
   });
   return Array.from(map.values()).sort((a, b) => b.totalMs - a.totalMs);
@@ -151,7 +148,7 @@ function formatMs(ms: number): string {
 
 export default function RecordsPage() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
+  const { user, token, loading: authLoading, signOut } = useAuth();
   const [records, setRecords] = useState<RecordWithCategory[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -164,51 +161,44 @@ export default function RecordsPage() {
   const [chartData, setChartData] = useState<StackedData | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
 
-  useEffect(() => { checkAuth(); }, []);
-
+  // 未認証リダイレクト
   useEffect(() => {
-    if (user) {
-      fetchRecords();
-      fetchChartData();
-    }
-  }, [viewMode, anchor, user]);
+    if (!authLoading && !user) router.push('/');
+  }, [authLoading, user, router]);
 
-  const checkAuth = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) { router.push('/'); return; }
-    setUser(session.user);
-    await fetchCategories();
-    setLoading(false);
-  };
+  // token 取得後に初期データ取得
+  useEffect(() => {
+    if (!token) return;
+    fetchCategories(token).then(() => setLoading(false));
+  }, [token]);
 
-  const getToken = async () => {
-    const session = await supabase.auth.getSession();
-    return session.data.session?.access_token || '';
-  };
+  // viewMode / anchor 変更時にデータ再取得
+  useEffect(() => {
+    if (!token) return;
+    fetchRecords(token);
+    fetchChartData(token);
+  }, [viewMode, anchor, token]);
 
-  const fetchRecords = async () => {
+  const fetchRecords = async (t: string) => {
     try {
       const { start, end } = getPeriodRange(viewMode, anchor);
-      const token = await getToken();
       const res = await fetch(
         `/api/records?start_date=${start.toISOString()}&end_date=${end.toISOString()}`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        { headers: { Authorization: `Bearer ${t}` } }
       );
       const { data } = await res.json();
       setRecords(data || []);
     } catch (e) { console.error(e); }
   };
 
-  const fetchChartData = async () => {
+  const fetchChartData = async (t: string) => {
     setChartLoading(true);
     try {
-      // グラフは常に月単位で表示
       const monthStart = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
       const monthEnd = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0, 23, 59, 59, 999);
-      const token = await getToken();
       const res = await fetch(
         `/api/charts/stacked?start_date=${monthStart.toISOString()}&end_date=${monthEnd.toISOString()}`,
-        { headers: { Authorization: `Bearer ${token}` } }
+        { headers: { Authorization: `Bearer ${t}` } }
       );
       const json = await res.json();
       setChartData(json);
@@ -219,30 +209,28 @@ export default function RecordsPage() {
     }
   };
 
-  const fetchCategories = async () => {
+  const fetchCategories = async (t: string) => {
     try {
-      const token = await getToken();
-      const res = await fetch('/api/categories', { headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch('/api/categories', { headers: { Authorization: `Bearer ${t}` } });
       const { data } = await res.json();
       setCategories(data || []);
     } catch (e) { console.error(e); }
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('この記録を削除しますか？')) return;
+    if (!confirm('この記録を削除しますか？') || !token) return;
     try {
-      const token = await getToken();
       await fetch(`/api/records/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
       });
-      fetchRecords();
-      fetchChartData();
+      fetchRecords(token);
+      fetchChartData(token);
     } catch (e) { console.error(e); }
   };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    await signOut();
     router.push('/');
   };
 
@@ -253,7 +241,7 @@ export default function RecordsPage() {
     return anchor.getFullYear() === now.getFullYear() && anchor.getMonth() === now.getMonth();
   })();
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <Container maxW="container.xl" py={10} centerContent>
         <Spinner size="xl" />
@@ -302,43 +290,24 @@ export default function RecordsPage() {
 
         {/* 期間ナビゲーション */}
         <HStack gap={3} align="center" flexWrap="wrap">
-          <Button size="sm" variant="outline" onClick={() => setAnchor(shiftAnchor(viewMode, anchor, -1))}>
-            ←
-          </Button>
+          <Button size="sm" variant="outline" onClick={() => setAnchor(shiftAnchor(viewMode, anchor, -1))}>←</Button>
           <Text fontWeight="semibold" minW="200px" textAlign="center">
             {getPeriodLabel(viewMode, anchor)}
           </Text>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setAnchor(shiftAnchor(viewMode, anchor, 1))}
-            disabled={isAtLatest}
-          >
-            →
-          </Button>
+          <Button size="sm" variant="outline" onClick={() => setAnchor(shiftAnchor(viewMode, anchor, 1))} disabled={isAtLatest}>→</Button>
           <Button size="sm" variant="ghost" colorPalette="blue" onClick={() => setAnchor(new Date())}>
             今{viewMode === 'day' ? '日' : viewMode === 'week' ? '週' : '月'}
           </Button>
           <Box flex={1} />
-          <Button
-            size="sm"
-            colorPalette="blue"
-            onClick={() => { setEditingRecord(null); setShowForm(true); }}
-          >
+          <Button size="sm" colorPalette="blue" onClick={() => { setEditingRecord(null); setShowForm(true); }}>
             + 記録を追加
           </Button>
         </HStack>
 
         {/* 2カラムレイアウト */}
-        <Box
-          display="grid"
-          gridTemplateColumns={{ base: '1fr', lg: '1fr 1fr' }}
-          gap={6}
-          alignItems="start"
-        >
+        <Box display="grid" gridTemplateColumns={{ base: '1fr', lg: '1fr 1fr' }} gap={6} alignItems="start">
           {/* 左カラム: 記録一覧 */}
           <VStack gap={4} align="stretch">
-            {/* カテゴリ別合計 */}
             {categoryTotals.length > 0 && (
               <Box p={4} borderWidth="1px" borderRadius="lg" bg="gray.50">
                 <Text fontSize="sm" fontWeight="semibold" color="gray.600" mb={3}>
@@ -361,14 +330,10 @@ export default function RecordsPage() {
               </Box>
             )}
 
-            {/* 記録一覧 */}
             {sortedDates.length === 0 ? (
               <Box p={10} textAlign="center" borderWidth="1px" borderRadius="lg">
                 <Text color="gray.500">この期間の記録はありません</Text>
-                <Button
-                  mt={4} size="sm" colorPalette="blue"
-                  onClick={() => { setEditingRecord(null); setShowForm(true); }}
-                >
+                <Button mt={4} size="sm" colorPalette="blue" onClick={() => { setEditingRecord(null); setShowForm(true); }}>
                   記録を追加
                 </Button>
               </Box>
@@ -378,20 +343,10 @@ export default function RecordsPage() {
                   const dayRecords = grouped.get(dateKey)!;
                   return (
                     <Box key={dateKey} borderWidth="1px" borderRadius="lg" overflow="hidden">
-                      <HStack
-                        px={4} py={2}
-                        bg="gray.50"
-                        borderBottomWidth="1px"
-                        justify="space-between"
-                      >
-                        <Text fontWeight="semibold" fontSize="sm">
-                          {formatDate(dayRecords[0].start_time)}
-                        </Text>
-                        <Text fontSize="sm" color="gray.500">
-                          {totalDuration(dayRecords)}
-                        </Text>
+                      <HStack px={4} py={2} bg="gray.50" borderBottomWidth="1px" justify="space-between">
+                        <Text fontWeight="semibold" fontSize="sm">{formatDate(dayRecords[0].start_time)}</Text>
+                        <Text fontSize="sm" color="gray.500">{totalDuration(dayRecords)}</Text>
                       </HStack>
-
                       <VStack gap={0} align="stretch" divideY="1px">
                         {dayRecords
                           .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
@@ -407,24 +362,9 @@ export default function RecordsPage() {
                                 </VStack>
                               </HStack>
                               <HStack gap={3}>
-                                <Badge colorPalette="blue" variant="subtle">
-                                  {calcDuration(r.start_time, r.end_time)}
-                                </Badge>
-                                <Button
-                                  size="xs" variant="ghost"
-                                  onClick={() => {
-                                    setEditingRecord({ id: r.id, category_id: r.category_id, start_time: r.start_time, end_time: r.end_time });
-                                    setShowForm(true);
-                                  }}
-                                >
-                                  編集
-                                </Button>
-                                <Button
-                                  size="xs" variant="ghost" colorPalette="red"
-                                  onClick={() => handleDelete(r.id)}
-                                >
-                                  削除
-                                </Button>
+                                <Badge colorPalette="blue" variant="subtle">{calcDuration(r.start_time, r.end_time)}</Badge>
+                                <Button size="xs" variant="ghost" onClick={() => { setEditingRecord({ id: r.id, category_id: r.category_id, start_time: r.start_time, end_time: r.end_time }); setShowForm(true); }}>編集</Button>
+                                <Button size="xs" variant="ghost" colorPalette="red" onClick={() => handleDelete(r.id)}>削除</Button>
                               </HStack>
                             </HStack>
                           ))}
@@ -442,17 +382,9 @@ export default function RecordsPage() {
               {anchor.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long' })}のグラフ
             </Text>
             {chartLoading ? (
-              <Box textAlign="center" py={10}>
-                <Spinner />
-              </Box>
+              <Box textAlign="center" py={10}><Spinner /></Box>
             ) : chartData && chartData.dates.length > 0 ? (
-              <StackedAreaChart
-                dates={chartData.dates}
-                categories={chartData.categories}
-                data={chartData.data}
-                enableZoom
-                periodMode
-              />
+              <StackedAreaChart dates={chartData.dates} categories={chartData.categories} data={chartData.data} enableZoom periodMode />
             ) : (
               <Box textAlign="center" py={10}>
                 <Text color="gray.500" fontSize="sm">この期間のデータがありません</Text>
@@ -462,12 +394,14 @@ export default function RecordsPage() {
         </Box>
       </VStack>
 
-      {/* 記録フォームモーダル */}
       {showForm && (
         <RecordForm
           categories={categories}
           record={editingRecord}
-          onSuccess={() => { setShowForm(false); fetchRecords(); fetchChartData(); }}
+          onSuccess={() => {
+            setShowForm(false);
+            if (token) { fetchRecords(token); fetchChartData(token); }
+          }}
           onCancel={() => setShowForm(false)}
         />
       )}
